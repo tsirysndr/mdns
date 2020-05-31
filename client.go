@@ -42,6 +42,7 @@ type QueryParam struct {
 	Interface           *net.Interface       // Multicast interface to use
 	Entries             chan<- *ServiceEntry // Entries Channel
 	WantUnicastResponse bool                 // Unicast response desired, as per 5.4 in RFC
+	IPv6                bool
 }
 
 // DefaultParams is used to return a default set of QueryParam's
@@ -51,7 +52,8 @@ func DefaultParams(service string) *QueryParam {
 		Domain:              "local",
 		Timeout:             time.Second,
 		Entries:             make(chan *ServiceEntry),
-		WantUnicastResponse: false, // TODO(reddaly): Change this default.
+		WantUnicastResponse: false, // TODO(reddaly): Change this default.,
+		IPv6:                true,
 	}
 }
 
@@ -61,7 +63,7 @@ func DefaultParams(service string) *QueryParam {
 // either read or buffer.
 func Query(params *QueryParam) error {
 	// Create a new client
-	client, err := newClient()
+	client, err := newClient(params)
 	if err != nil {
 		return err
 	}
@@ -108,19 +110,15 @@ type client struct {
 
 // NewClient creates a new mdns Client that can be used to query
 // for records
-func newClient() (*client, error) {
+func newClient(params *QueryParam) (*client, error) {
 	// TODO(reddaly): At least attempt to bind to the port required in the spec.
 	// Create a IPv4 listener
 	uconn4, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
 	if err != nil {
 		log.Printf("[ERR] mdns: Failed to bind to udp4 port: %v", err)
 	}
-	uconn6, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6zero, Port: 0})
-	if err != nil {
-		log.Printf("[ERR] mdns: Failed to bind to udp6 port: %v", err)
-	}
 
-	if uconn4 == nil && uconn6 == nil {
+	if uconn4 == nil {
 		return nil, fmt.Errorf("failed to bind to any unicast udp port")
 	}
 
@@ -128,20 +126,35 @@ func newClient() (*client, error) {
 	if err != nil {
 		log.Printf("[ERR] mdns: Failed to bind to udp4 port: %v", err)
 	}
-	mconn6, err := net.ListenMulticastUDP("udp6", nil, ipv6Addr)
-	if err != nil {
-		log.Printf("[ERR] mdns: Failed to bind to udp6 port: %v", err)
+
+	if mconn4 == nil {
+		return nil, fmt.Errorf("failed to bind to any multicast udp port")
 	}
 
-	if mconn4 == nil && mconn6 == nil {
-		return nil, fmt.Errorf("failed to bind to any multicast udp port")
+	if params.IPv6 {
+		uconn6, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6zero, Port: 0})
+		if err != nil {
+			log.Printf("[ERR] mdns: Failed to bind to udp6 port: %v", err)
+		}
+		mconn6, err := net.ListenMulticastUDP("udp6", nil, ipv6Addr)
+		if err != nil {
+			log.Printf("[ERR] mdns: Failed to bind to udp6 port: %v", err)
+		}
+		c := &client{
+			ipv4MulticastConn: mconn4,
+			ipv6MulticastConn: mconn6,
+			ipv4UnicastConn:   uconn4,
+			ipv6UnicastConn:   uconn6,
+			closedCh:          make(chan struct{}),
+		}
+		return c, nil
 	}
 
 	c := &client{
 		ipv4MulticastConn: mconn4,
-		ipv6MulticastConn: mconn6,
+		ipv6MulticastConn: nil,
 		ipv4UnicastConn:   uconn4,
-		ipv6UnicastConn:   uconn6,
+		ipv6UnicastConn:   nil,
 		closedCh:          make(chan struct{}),
 	}
 	return c, nil

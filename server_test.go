@@ -48,6 +48,7 @@ func TestServer_Lookup(t *testing.T) {
 		Domain:  "local",
 		Timeout: 50 * time.Millisecond,
 		Entries: entries,
+		IPv6:    false,
 	}
 	err = Query(params)
 	if err != nil {
